@@ -1,99 +1,9 @@
-from datetime import datetime, timedelta, date
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.bash import BashOperator
-from psaw import PushshiftAPI
 import pandas as pd
-import datetime as dt
+from pathlib import Path
 import re
 import nltk
 nltk.download('stopwords')
 from nltk.corpus import stopwords
-from pathlib import Path
-import snscrape.modules.twitter as sntwitter
-import os
-from tqdm import tqdm
-
-# from TwitterScraper import ScrapeTwitter
-# from RedditScraper import ScrapeReddit
-# from cleaning import CleanText
-# from SentimentAnalyzer import SentimentAnalysis
-
-default_args = {
-    'owner': 'airflow',
-    'retries': 5,
-    'retry_delay':timedelta(minutes=1), 
-    'schedule_interval':'0 7 * * *'
-}
-
-def ScrapeReddit(ti):
-    api = PushshiftAPI()
-
-    def data_prep_comments(term, subreddits, start_time, end_time, filters):
-        if (len(filters) == 0):
-            filters = ['id', 'author', 'created_utc',
-                       'body']
-                       #We set by default some usefull columns 
-
-        comments = list(api.search_comments(
-            q=term,                 #Subreddit we want to audit
-            subreddit = subreddits,
-            after=start_time,       #Start date
-            before=end_time,        #End date
-            filter=filters))        #Column names we want to retrieve
-            ##limit=limit))          #Max number of comments
-  
-        return pd.DataFrame(comments) #Return dataframe for analysis
-
-    today = date.today()
-    yesterday = today - timedelta(days = 1)
-
-    today_year = int(today.strftime("%Y"))
-    yesterday_year = int(yesterday.strftime("%Y"))
-    today_month = int(today.strftime("%m"))
-    yesterday_month = int(yesterday.strftime("%m"))
-    today_day = int(today.strftime("%d"))
-    yesterday_day = int(yesterday.strftime("%d"))
-
-    df_comment = data_prep_comments('LGBT', 'indonesia',int(dt.datetime(yesterday_year, yesterday_month, yesterday_day).timestamp()), int(dt.datetime(today_year, today_month, today_day).timestamp()), filters=[],)
-    df_comment = df_comment[['created', 'body']]
-    df_comment.rename(columns = {'created':'DateTime', 'body':'Text'}, inplace = True)
-
-    # df_comment = df_comment[['cleanBody_stopwords_included']]
-    df_comment.to_csv(Path("/opt/airflow/data/reddit_lgbt.csv"))
-    print(df_comment.loc[0,:])
-
-def ScrapeTwitter():
-  def scrape_tweets(query, max_tweets=-1,output_path="./scraper/output/" ): 
-      output_path = os.path.join(output_path,dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+"-"+str(query)+".csv")
-      
-      tweets_list = []
-      try:
-          for i,tweet in tqdm(enumerate(sntwitter.TwitterSearchScraper(query).get_items())):
-              if max_tweets != -1 and i >= int(max_tweets):
-                  break
-              tweets_list.append([tweet.date, tweet.id, tweet.content, tweet.username])
-      except KeyboardInterrupt:
-          print("Scraping berhenti atas permintaan pengguna")
-      df = pd.DataFrame(tweets_list, columns=['Datetime', 'Tweet Id', 'Text', 'Username'])
-      #df.to_csv(output_path, index=False)
-      return df
-
-
-  today = date.today()
-  yesterday = today - timedelta(days = 1)
-  today_new = today.strftime("%Y-%m-%d")
-  yesterday_new = yesterday.strftime("%Y-%m-%d")
-
-  df = scrape_tweets("lgbt OR lgbtq OR onelove lang:id since:"+yesterday_new+" until:"+today_new, -1, "/content/")
-
-  df = df.drop_duplicates()
-  df = df.dropna(how='any',axis=0)
-  df_new = df[["Datetime","Text"]]
-
-  df_new.dropna(how='any',axis=0)
-
-  df_new.to_csv(Path("/opt/airflow/data/twitter_lgbt.csv"))
 
 def CleanText():
     twitter = pd.read_csv(Path("/opt/airflow/data/twitter_lgbt.csv"))
@@ -135,6 +45,14 @@ def CleanText():
         text = re.sub('&amp;', ' ', text)
         text = re.sub('[^0-9a-zA-Z,.?!]+', ' ', text) 
         text = re.sub('  +', ' ', text)
+        return text
+
+    def remove_stopword(text):
+        text = re.sub('[.,!?]','',text)
+        text = ' '.join(['' if word in idn_stopwords else word for word in text.split(' ')]) #Mengganti stopword dengan ''
+        text = re.sub('  +', ' ', text)
+        text = text.title()
+        text = text.strip() #Menghapus spasi atau newline di awal dan akhir kalimat yang tidak diperlukan
         return text
 
     def fixSingkatan(text):
@@ -199,22 +117,3 @@ def CleanText():
     df["clean_Text"] = df["clean_Text"].apply(fixSingkatan)
     df.to_csv(Path("/opt/airflow/data/lgbt_clean.csv"))
 
-with DAG(
-    dag_id = 'sentiment_analysis_dag',
-    default_args=default_args,
-    description='DAG to run sentiment analysis on tweets and reddit comments',
-    start_date = datetime(2022, 11, 29)
-) as dag:
-    taskScrapeReddit = PythonOperator(
-        task_id = 'scrape_reddit',
-        python_callable = ScrapeReddit
-    )
-    taskScrapeTwitter = PythonOperator(
-        task_id = 'scrape_twitter',
-        python_callable = ScrapeTwitter
-    )
-    taskClean = PythonOperator(
-        task_id = 'clean_text',
-        python_callable = CleanText
-    )
-    [taskScrapeTwitter, taskScrapeReddit ] >> taskClean
