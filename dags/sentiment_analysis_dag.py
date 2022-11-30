@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, date
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
+from airflow.operators.postgres_operator import PostgresOperator
 from psaw import PushshiftAPI
 import pandas as pd
 import datetime as dt
@@ -13,6 +14,9 @@ from pathlib import Path
 import snscrape.modules.twitter as sntwitter
 import os
 from tqdm import tqdm
+from utils.database import Postgres, TweetsTable
+from utils.convert import ConvertDatetime
+
 
 # from TwitterScraper import ScrapeTwitter
 # from RedditScraper import ScrapeReddit
@@ -56,11 +60,11 @@ def ScrapeReddit(ti):
     yesterday_day = int(yesterday.strftime("%d"))
 
     df_comment = data_prep_comments('LGBT', 'indonesia',int(dt.datetime(yesterday_year, yesterday_month, yesterday_day).timestamp()), int(dt.datetime(today_year, today_month, today_day).timestamp()), filters=[],)
-    df_comment = df_comment[['created', 'body']]
+    df_comment = df_comment[['id','created', 'body']]
     df_comment.rename(columns = {'created':'DateTime', 'body':'Text'}, inplace = True)
 
     # df_comment = df_comment[['cleanBody_stopwords_included']]
-    df_comment.to_csv(Path("/opt/airflow/data/reddit_lgbt.csv"))
+    df_comment.to_csv(Path("/opt/airflow/data/reddit_lgbt.csv"), index=False)
     print(df_comment.loc[0,:])
 
 def ScrapeTwitter():
@@ -75,7 +79,7 @@ def ScrapeTwitter():
               tweets_list.append([tweet.date, tweet.id, tweet.content, tweet.username])
       except KeyboardInterrupt:
           print("Scraping berhenti atas permintaan pengguna")
-      df = pd.DataFrame(tweets_list, columns=['Datetime', 'Tweet Id', 'Text', 'Username'])
+      df = pd.DataFrame(tweets_list, columns=['Datetime', 'id', 'Text', 'Username'])
       #df.to_csv(output_path, index=False)
       return df
 
@@ -89,28 +93,17 @@ def ScrapeTwitter():
 
   df = df.drop_duplicates()
   df = df.dropna(how='any',axis=0)
-  df_new = df[["Datetime","Text"]]
+  df_new = df[["id","Datetime","Text"]]
 
   df_new.dropna(how='any',axis=0)
 
-  df_new.to_csv(Path("/opt/airflow/data/twitter_lgbt.csv"))
+  df_new.to_csv(Path("/opt/airflow/data/twitter_lgbt.csv"), index=False)
+  print(f"twitter: {df_new.loc[0, :]}")
 
 def CleanText():
     twitter = pd.read_csv(Path("/opt/airflow/data/twitter_lgbt.csv"))
     reddit = pd.read_csv(Path("/opt/airflow/data/reddit_lgbt.csv"))
     df = pd.concat([twitter, reddit], ignore_index=True)
-
-    idn_stopwords = stopwords.words('indonesian')
-    idn_stopwords.extend(
-        ['ae','ah','aing','aj','aja','ak','anjir','ayo','banget','belom','bener2','bgt','biar','bikin','blm','btw','bnyk','byk','cuman','d','dah','dapet','deh','deket',
-        'dg','dgn','disana','dll','doang','dpt','dr','drpd','duar','duarr','duarrr','duluan','e', 'eh','emang','emg','engga','g','ga','gak','gaada','gamau','gara',
-        'gara2','gatau','gegara','gimana','gini','gtu','gitu','gk','gmn','gt','gue','gw','hah', 'haha','jd','jdi','jg','jgn','kagak','ka','kaga','kah','kak','kalo',
-        'kali','karna','kau','kayak','kayaknya','kek','kl','klian','klo','knp','kpd','ku','krn','krna','kyk','la','lg','lgsg','lha','lho','lo','loh','lu','ma','mah','mending',
-        'min','mo','mrk','msh','na','nder','nge','ngga','nggak','ni','nih','ntar','nya','org','pakai','pake','pd','pdhl','salah','sama2','sampe','sbg','sdh',
-        'sebenernya','sat','set','satset','si','sih','situ','skrg','sm','spt','tau','tau2','tbtb','tb2','td','tdk','tiba2','tp','tpi','ttg','trus','trs','tsb',
-        'tu','tuh','udah','udh','utk','xixi','w','wes','wkwk','wkwkw','wkwkwk','wkwkwkwk','wow','x','y','yg','ya','yaa','yaaa','yah','ygy','yo','yuk'])
-    idn_stopwords.extend(
-        ['ra','mbak','mas','kui','ki','po','ora','iki','karo','opo','sek','sik','arep','og','wae','ngono','tenan','ben','iso','kudu','sing','nek','dadi','pa','iku','saiki'])
 
     def remove_unnecessary_char(text):
         text = re.sub("\[USERNAME\]", " ", text)
@@ -197,7 +190,34 @@ def CleanText():
 
     df["clean_Text"] = df["Text"].apply(preprocess)
     df["clean_Text"] = df["clean_Text"].apply(fixSingkatan)
-    df.to_csv(Path("/opt/airflow/data/lgbt_clean.csv"))
+    df.to_csv(Path("/opt/airflow/data/input.csv"))
+    print(f"cleaning: {df.loc[:10, 'clean_Text']}")
+
+create_table_sql_query = """
+create table if not exists tweets (
+    id serial primary key,
+    timestamp timestamp,
+    clean_tweet varchar(40000),
+    timestamp timestamp default current_timestamp
+);
+"""
+
+def uploadCSV():
+    # buat koneksi ke db
+    db = Postgres(
+        database="airflow",
+        host="analisissentimenrekdat_postgres_1",
+        user="airflow",
+        password="airflow",
+        port="5432"
+    )
+    table_tweets = TweetsTable(db)
+    
+    df = pd.read_csv('/opt/airflow/data/input.csv')
+    table_tweets.insert_many_from_df(df)
+    print("upload selesai")
+
+    db.close()
 
 with DAG(
     dag_id = 'sentiment_analysis_dag',
@@ -217,4 +237,14 @@ with DAG(
         task_id = 'clean_text',
         python_callable = CleanText
     )
+    create_table = PostgresOperator(
+        sql = create_table_sql_query,
+        task_id = "create_table_task",
+        postgres_conn_id = "postgres_local",
+    )
+    upload_csv = PythonOperator(
+        task_id = 'upload_csv',
+        python_callable = uploadCSV
+    )
     [taskScrapeTwitter, taskScrapeReddit ] >> taskClean
+    [taskClean, create_table] >> upload_csv

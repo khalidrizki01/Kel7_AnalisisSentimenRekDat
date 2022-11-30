@@ -6,3 +6,4 @@ psycopg2
 transformers
 nest-asyncio
 psaw
+matplotlib
