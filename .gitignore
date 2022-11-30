@@ -16,6 +16,7 @@ airflow/www/static/coverage/
 airflow/www/*.log
 
 /logs/
+!/logs/.gitkeep
 airflow-webserver.pid
 standalone_admin_password.txt
 
