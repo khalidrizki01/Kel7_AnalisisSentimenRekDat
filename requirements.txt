@@ -1,0 +1,7 @@
+nltk
+pandas
+psycopg2
+transformers
+nest-asyncio
+psaw
+tweepy
