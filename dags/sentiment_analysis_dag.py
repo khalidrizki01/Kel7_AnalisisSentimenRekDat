@@ -17,6 +17,7 @@ from tqdm import tqdm
 from utils.database import Postgres, TweetsTable
 from utils.convert import ConvertDatetime
 
+POSTGRES_HOST = 'kel7_analisissentimenrekdat_postgres_1'
 
 # from TwitterScraper import ScrapeTwitter
 # from RedditScraper import ScrapeReddit
@@ -63,7 +64,7 @@ def ScrapeReddit(ti):
     df_comment['created_utc'] = pd.to_datetime(df_comment['created_utc'], 
                                        unit = 's')
     df_comment = df_comment[['created_utc', 'body']]
-    df_comment.rename(columns = {'created_utc':'DateTime', 'body':'Text'}, inplace = True)
+    df_comment.rename(columns = {'created_utc':'Datetime', 'body':'Text'}, inplace = True)
 
     # df_comment = df_comment[['cleanBody_stopwords_included']]
     df_comment.to_csv(Path("/opt/airflow/data/reddit_lgbt.csv"), index=False)
@@ -196,7 +197,8 @@ def CleanText():
     df["clean_Text"] = df["clean_Text"].apply(fixSingkatan)
     rows_to_drop = df[df['clean_Text']==''].index
     df.drop(rows_to_drop, inplace=True)
-    df.to_csv(Path("/opt/airflow/data/input.csv"))
+    df.dropna()
+    df.to_csv(Path("/opt/airflow/data/output_clean_text.csv"))
     print(f"cleaning: {df.loc[:10, 'clean_Text']}")
 
 create_table_sql_query = """
@@ -205,7 +207,7 @@ create table if not exists tweets (
     timestamp timestamp default current_timestamp,
     source varchar(50),
     tweet_created_at timestamp,
-    tweet_clean varchar(40000),
+    tweet_clean varchar(40000)
 );
 """
 # create_table_sql_query = """
@@ -216,103 +218,44 @@ def uploadCSV():
     # buat koneksi ke db
     db = Postgres(
         database="airflow",
-        host="kel7_analisissentimenrekdat-postgres-1",
+        host=POSTGRES_HOST,
         user="airflow",
         password="airflow",
         port="5432"
     )
     table_tweets = TweetsTable(db)
     
-    df = pd.read_csv('/opt/airflow/data/input.csv')
+    df = pd.read_csv('/opt/airflow/data/output_clean_text.csv')
     table_tweets.insert_many(
         source=df['source'],
-        tweet_created_at=df['DateTime'],
+        tweet_created_at=df['Datetime'],
         tweet_clean=df['clean_Text']
     )
     print("upload selesai")
 
     db.close()
 
-def assign_sentiment():
-    from transformers import pipeline
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-    from matplotlib import pyplot as plt
-    import os.path
-
-    pretrained_name = "sahri/indonesiasentiment"
-
-    sentiment_classifier = pipeline(
-        "text-classification",
-        model=pretrained_name,
-        # tokenizer=AutoTokenizer.from_pretrained(pretrained_name)
-        device=0
+def findAllTweets():
+    db = Postgres(
+        database="airflow",
+        host=POSTGRES_HOST,
+        user="airflow",
+        password="airflow",
+        port="5432"
     )
+    table_tweets = TweetsTable(db)
+    
+    df = table_tweets.find_all()
+    df.to_csv('/opt/airflow/data/output_postgres.csv')
 
+    db.close()
 
-    """## Load Integrated-Cleaned Data
+def dropNa():
+    df = pd.read_csv('/opt/airflow/data/input.csv')
+    df = df.drop('DateTime', axis=1)
+    df = df.dropna()
+    df.to_csv('/opt/airflow/data/input-1.1.csv')
 
-    # ### Load From Uploaded CSV File
-    # """
-
-    df = pd.read_csv(Path("/opt/airflow/data/input.csv"))
-
-    for i in range (len(df)):
-        if len(df.clean_Text[i].split()) >= 182: # maximum inputnya agar bisa bekerja adalah sejumlah 182
-            df.clean_Text[i] = ''
-    df_clean = df['clean_Text']
-
-    """### Load from SQL Database"""
-    # import psycopg2
-    # import pandas as pd
-    # from sqlalchemy import create_engine
-
-    # Create an engine instance
-    # engine = create_engine('postgresql+psycopg2://test:@127.0.0.1', pool_recycle=3600);
-
-    # Connect to PostgreSQL server
-    # dbConnection = engine.connect();
-
-    # df = pd.read_sql("select * from \"<Nama Tabel>\"", dbConnection);
-    # for i in range (len(df)):
-    #     if len(df.clean_tweet[i].split()) >= 182: # maximum inputnya agar bisa bekerja adalah sejumlah 182
-    #         df.clean_tweet[i] = ''
-    # df_clean = df['clean_tweet']
-
-    pd.set_option('display.expand_frame_repr', False);
-
-
-    sentiment_list = []
-    indexToDrop = []
-
-    text_list = df_clean.tolist()
-
-    # for i in tqdm(range(len(df))): 
-    for i in range(len(df)): 
-        if(text_list[i] == ''):
-            indexToDrop.append(i)
-            # result = sentiment_classifier('neutral')[0]
-            # sentiment_list.append(result["label"])
-        else:
-            result = sentiment_classifier(text_list[i])[0]
-            sentiment_list.append(result["label"])
-
-    # print(sentiment_list[:5])
-
-
-    # print(indexToDrop)
-    textLengthToDrop = []
-    df.drop(indexToDrop, inplace=True)
-
-    # for i in indexToDrop:
-    #     textLengthToDrop.append(len(text_list[i].split()))
-    # print(f"minimum length classifier doesn't work: {min(textLengthToDrop)}")
-
-    # """## Load Sentiment Analysis Result to DataFrame"""
-
-    df["sentiment"] = sentiment_list
-
-    print(f'banyak sentimen: {df["sentiment"].value_counts()}')
-    df.to_csv(Path(f"/opt/airflow/data/LabeledSentimentAnalysis-{datetime.now()}.csv"), index=False)
 
 with DAG(
     dag_id = 'sentiment_analysis_dag',
@@ -341,9 +284,15 @@ with DAG(
         task_id = 'upload_csv',
         python_callable = uploadCSV
     )
-    taskAssignSentiment = PythonOperator(
-        task_id = 'assign_sentiment',
-        python_callable = assign_sentiment
+    drop_na = PythonOperator(
+        task_id = 'drop_na',
+        python_callable = dropNa
     )
-    [taskScrapeTwitter, taskScrapeReddit ] >> taskClean >> taskAssignSentiment
-    [taskClean, create_table] >> upload_csv
+
+    find_all_tweets = PythonOperator(
+        task_id = 'find_all_tweets',
+        python_callable = findAllTweets
+    )
+
+    [taskScrapeTwitter, taskScrapeReddit ] >> taskClean
+    [taskClean, create_table] >> upload_csv >> find_all_tweets
