@@ -27,7 +27,7 @@ class Table(Postgres):
 
     # read helper methods
     def get_dataframe_from_tuple(self, data: tuple) -> pd.DataFrame:
-        df = pd.DataFrame(data, columns=['id', *self.columns, 'timestamp'])
+        df = pd.DataFrame(data, columns=['id', 'timestamp', *self.columns])
         df = df.iloc[:, 1:]   # remove first column
         return df
 

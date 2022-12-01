@@ -54,13 +54,14 @@ def assign_sentiment():
     import pandas as pd
     from sqlalchemy import create_engine
 
-    # Create an engine instance
-    engine = create_engine('postgresql+psycopg2://test:@127.0.0.1', pool_recycle=3600);
+    # # Create an engine instance
+    # engine = create_engine('postgresql+psycopg2://test:@127.0.0.1', pool_recycle=3600);
 
-    # Connect to PostgreSQL server
-    dbConnection = engine.connect();
+    # # Connect to PostgreSQL server
+    # dbConnection = engine.connect();
 
-    df = pd.read_sql("select * from \"<Nama Tabel>\"", dbConnection);
+    # df = pd.read_sql("select * from \"<Nama Tabel>\"", dbConnection);
+    df = pd.read_csv(Path('/opt/airflow/data/output2.csv'))
     for i in range (len(df)):
         if len(df.clean_tweet[i].split()) >= 182: # maximum inputnya agar bisa bekerja adalah sejumlah 182
             df.clean_tweet[i] = ''

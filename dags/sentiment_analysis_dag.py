@@ -50,7 +50,7 @@ def ScrapeReddit(ti):
         return pd.DataFrame(comments) #Return dataframe for analysis
 
     today = date.today()
-    yesterday = today - timedelta(days = 1)
+    yesterday = today - timedelta(days = 2)
 
     today_year = int(today.strftime("%Y"))
     yesterday_year = int(yesterday.strftime("%Y"))
@@ -60,8 +60,10 @@ def ScrapeReddit(ti):
     yesterday_day = int(yesterday.strftime("%d"))
 
     df_comment = data_prep_comments('LGBT', 'indonesia',int(dt.datetime(yesterday_year, yesterday_month, yesterday_day).timestamp()), int(dt.datetime(today_year, today_month, today_day).timestamp()), filters=[],)
-    df_comment = df_comment[['id','created', 'body']]
-    df_comment.rename(columns = {'created':'DateTime', 'body':'Text'}, inplace = True)
+    df_comment['created_utc'] = pd.to_datetime(df_comment['created_utc'], 
+                                       unit = 's')
+    df_comment = df_comment[['created_utc', 'body']]
+    df_comment.rename(columns = {'created_utc':'DateTime', 'body':'Text'}, inplace = True)
 
     # df_comment = df_comment[['cleanBody_stopwords_included']]
     df_comment.to_csv(Path("/opt/airflow/data/reddit_lgbt.csv"), index=False)
@@ -93,7 +95,7 @@ def ScrapeTwitter():
 
   df = df.drop_duplicates()
   df = df.dropna(how='any',axis=0)
-  df_new = df[["id","Datetime","Text"]]
+  df_new = df[["Datetime","Text"]]
 
   df_new.dropna(how='any',axis=0)
 
@@ -102,7 +104,9 @@ def ScrapeTwitter():
 
 def CleanText():
     twitter = pd.read_csv(Path("/opt/airflow/data/twitter_lgbt.csv"))
+    twitter['source'] = "twitter"
     reddit = pd.read_csv(Path("/opt/airflow/data/reddit_lgbt.csv"))
+    reddit['source'] = "reddit"
     df = pd.concat([twitter, reddit], ignore_index=True)
 
     def remove_unnecessary_char(text):
@@ -190,23 +194,29 @@ def CleanText():
 
     df["clean_Text"] = df["Text"].apply(preprocess)
     df["clean_Text"] = df["clean_Text"].apply(fixSingkatan)
+    rows_to_drop = df[df['clean_Text']==''].index
+    df.drop(rows_to_drop, inplace=True)
     df.to_csv(Path("/opt/airflow/data/input.csv"))
     print(f"cleaning: {df.loc[:10, 'clean_Text']}")
 
 create_table_sql_query = """
 create table if not exists tweets (
     id serial primary key,
-    timestamp timestamp,
-    clean_tweet varchar(40000),
-    timestamp timestamp default current_timestamp
+    timestamp timestamp default current_timestamp,
+    source varchar(50),
+    tweet_created_at timestamp,
+    tweet_clean varchar(40000),
 );
 """
+# create_table_sql_query = """
+# drop table tweets;
+# """
 
 def uploadCSV():
     # buat koneksi ke db
     db = Postgres(
         database="airflow",
-        host="analisissentimenrekdat_postgres_1",
+        host="kel7_analisissentimenrekdat-postgres-1",
         user="airflow",
         password="airflow",
         port="5432"
@@ -214,10 +224,95 @@ def uploadCSV():
     table_tweets = TweetsTable(db)
     
     df = pd.read_csv('/opt/airflow/data/input.csv')
-    table_tweets.insert_many_from_df(df)
+    table_tweets.insert_many(
+        source=df['source'],
+        tweet_created_at=df['DateTime'],
+        tweet_clean=df['clean_Text']
+    )
     print("upload selesai")
 
     db.close()
+
+def assign_sentiment():
+    from transformers import pipeline
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    from matplotlib import pyplot as plt
+    import os.path
+
+    pretrained_name = "sahri/indonesiasentiment"
+
+    sentiment_classifier = pipeline(
+        "text-classification",
+        model=pretrained_name,
+        # tokenizer=AutoTokenizer.from_pretrained(pretrained_name)
+        device=0
+    )
+
+
+    """## Load Integrated-Cleaned Data
+
+    # ### Load From Uploaded CSV File
+    # """
+
+    df = pd.read_csv(Path("/opt/airflow/data/input.csv"))
+
+    for i in range (len(df)):
+        if len(df.clean_Text[i].split()) >= 182: # maximum inputnya agar bisa bekerja adalah sejumlah 182
+            df.clean_Text[i] = ''
+    df_clean = df['clean_Text']
+
+    """### Load from SQL Database"""
+    # import psycopg2
+    # import pandas as pd
+    # from sqlalchemy import create_engine
+
+    # Create an engine instance
+    # engine = create_engine('postgresql+psycopg2://test:@127.0.0.1', pool_recycle=3600);
+
+    # Connect to PostgreSQL server
+    # dbConnection = engine.connect();
+
+    # df = pd.read_sql("select * from \"<Nama Tabel>\"", dbConnection);
+    # for i in range (len(df)):
+    #     if len(df.clean_tweet[i].split()) >= 182: # maximum inputnya agar bisa bekerja adalah sejumlah 182
+    #         df.clean_tweet[i] = ''
+    # df_clean = df['clean_tweet']
+
+    pd.set_option('display.expand_frame_repr', False);
+
+
+    sentiment_list = []
+    indexToDrop = []
+
+    text_list = df_clean.tolist()
+
+    # for i in tqdm(range(len(df))): 
+    for i in range(len(df)): 
+        if(text_list[i] == ''):
+            indexToDrop.append(i)
+            # result = sentiment_classifier('neutral')[0]
+            # sentiment_list.append(result["label"])
+        else:
+            result = sentiment_classifier(text_list[i])[0]
+            sentiment_list.append(result["label"])
+
+    # print(sentiment_list[:5])
+
+
+    # print(indexToDrop)
+    textLengthToDrop = []
+    df.drop(indexToDrop, inplace=True)
+
+    # for i in indexToDrop:
+    #     textLengthToDrop.append(len(text_list[i].split()))
+    # print(f"minimum length classifier doesn't work: {min(textLengthToDrop)}")
+
+    # """## Load Sentiment Analysis Result to DataFrame"""
+
+    df["sentiment"] = sentiment_list
+
+    print(f'banyak sentimen: {df["sentiment"].value_counts()}')
+    df.to_csv(Path(f"/opt/airflow/data/LabeledSentimentAnalysis-{datetime.now()}.csv"), index=False)
 
 with DAG(
     dag_id = 'sentiment_analysis_dag',
@@ -246,5 +341,9 @@ with DAG(
         task_id = 'upload_csv',
         python_callable = uploadCSV
     )
-    [taskScrapeTwitter, taskScrapeReddit ] >> taskClean
+    taskAssignSentiment = PythonOperator(
+        task_id = 'assign_sentiment',
+        python_callable = assign_sentiment
+    )
+    [taskScrapeTwitter, taskScrapeReddit ] >> taskClean >> taskAssignSentiment
     [taskClean, create_table] >> upload_csv

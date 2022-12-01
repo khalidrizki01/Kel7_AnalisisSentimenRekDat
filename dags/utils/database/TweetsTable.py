@@ -13,26 +13,25 @@ class TweetsTable(Table):
         super().__init__(
             db,
             table_name="tweets",
-            columns=['date', 'time', 'clean_tweet', 'source']
+            columns=['source', 'tweet_created_at', 'tweet_clean']
         )
 
     def insert_many(
         self,
-        source: str,
-        date: pd.Series,
-        time: pd.Series,
-        clean_tweet: pd.Series
+        source: pd.Series,
+        tweet_created_at: pd.Series,
+        tweet_clean: pd.Series
     ):
-        df = self.create_dataframe(source, date, time, clean_tweet)
+        df = self.create_dataframe(source, tweet_created_at, tweet_clean)
         self.insert_many_from_df(df)
 
-    def create_dataframe(self, source, date, time, clean_tweet) -> pd.DataFrame:
+    def create_dataframe(self, source, tweet_created_at, tweet_clean) -> pd.DataFrame:
         df = pd.DataFrame({
-            'date': date,
-            'time': time,
-            'clean_tweet': clean_tweet,
+            'source': source,
+            'tweet_created_at': tweet_created_at,
+            'tweet_clean': tweet_clean
         })
-        df['source'] = source
+        # df['source'] = source
         return df
 
     def get_values_format(self, df: pd.DataFrame):
@@ -40,10 +39,9 @@ class TweetsTable(Table):
         nrows = df.shape[0]
         for i in range(nrows):
             row = (
-                df['date'][i],
-                df['time'][i],
-                df['clean_tweet'][i],
-                df['source'][i]
+                df['source'][i],
+                df['tweet_created_at'][i],
+                df['tweet_clean'][i]
             )
             values.append(row)
         return tuple(values)
