@@ -18,8 +18,11 @@ from utils.database import Postgres, TweetsTable
 from utils.convert import ConvertDatetime
 
 def ScrapeTwitter():
-  def scrape_tweets(query, max_tweets=-1,output_path="./scraper/output/" ): 
-      output_path = os.path.join(output_path,dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+"-"+str(query)+".csv")
+  def scrape_tweets(query, 
+                    max_tweets=-1,
+                    output_path="./scraper/output/" ): 
+      output_path = os.path.join(output_path,
+        dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+"-"+str(query)+".csv")
       
       tweets_list = []
       try:

@@ -64,7 +64,7 @@ def uploadToPostgres():
 with DAG(
     dag_id = 'lgbt_reddit_twitter_etl',
     default_args=default_args,
-    description='DAG to run sentiment analysis on tweets and reddit comments',
+    description='DAG to run ETL on tweets and reddit comments',
     start_date = datetime(2022, 11, 29)
 ) as dag:
 

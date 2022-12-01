@@ -26,7 +26,7 @@ default_args = {
     'owner': 'airflow',
     'retries': 5,
     'retry_delay':timedelta(minutes=1), 
-    'schedule_interval':'0 7 * * *'
+    'schedule_interval':'0 0 * * Mon'
 }
 
 create_table_sql_query = """
@@ -57,7 +57,7 @@ def downloadFromPostgres():
 with DAG(
     dag_id = 'lgbt_reddit_twitter_download_postgres',
     default_args=default_args,
-    description='DAG to run sentiment analysis on tweets and reddit comments',
+    description='DAG to download comments data from postgres',
     start_date = datetime(2022, 11, 29)
 ) as dag:
     initiate_postgres_table = PostgresOperator(
